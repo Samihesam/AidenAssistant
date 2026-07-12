@@ -62,6 +62,7 @@ fun AidenApp(
     roleRequestLauncher: androidx.activity.result.ActivityResultLauncher<Intent>,
     multiplePermissionsLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>
 ) {
+    var termsAccepted by remember { mutableStateOf(prefs.getBoolean("terms_accepted", false)) }
     var onboardingDone by remember { mutableStateOf(prefs.getBoolean("onboarding_done", false)) }
     var selectedAvatar by remember {
         mutableStateOf(
@@ -70,7 +71,14 @@ fun AidenApp(
     }
     var selectedVoiceLabel by remember { mutableStateOf(prefs.getString("selected_voice", null)) }
 
-    if (!onboardingDone) {
+    if (!termsAccepted) {
+        TermsOfServiceScreen(
+            onAccepted = {
+                prefs.edit().putBoolean("terms_accepted", true).apply()
+                termsAccepted = true
+            }
+        )
+    } else if (!onboardingDone) {
         OnboardingFlow(
             ttsManager = ttsManager,
             permissionList = buildPermissionList(),
@@ -119,6 +127,8 @@ fun HomeShell(
     var avatarState by remember { mutableStateOf(AvatarState.IDLE) }
     val idleAnimation = rememberIdleBehavior(currentState = avatarState)
 
+    var assistantName by remember { mutableStateOf(PersonalizationManager.getAssistantName(activity)) }
+
     DisposableEffect(Unit) {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -128,6 +138,37 @@ fun HomeShell(
                 when (val command = VoiceCommandParser.parse(text)) {
                     is VoiceCommandParser.AssistantCommand.ChangeAvatarVisibility -> {
                         avatarState = if (command.show) AvatarState.IDLE else AvatarState.HIDDEN
+                        return
+                    }
+                    is VoiceCommandParser.AssistantCommand.OpenApp -> {
+                        val opened = AppLauncher.openAppByName(activity, command.appName)
+                        if (!opened) {
+                            ttsManager.speak("اپی به اسم ${command.appName} پیدا نکردم")
+                        }
+                        return
+                    }
+                    else -> { }
+                }
+
+                when (val personalCommand = PersonalizationCommandParser.parse(text)) {
+                    is PersonalizationCommandParser.PersonalizationCommand.RenameAssistant -> {
+                        PersonalizationManager.setAssistantName(activity, personalCommand.newName)
+                        assistantName = personalCommand.newName
+                        ttsManager.speak("باشه، از این به بعد اسمم ${personalCommand.newName} هست")
+                    }
+                    is PersonalizationCommandParser.PersonalizationCommand.RememberFact -> {
+                        PersonalizationManager.saveMemory(activity, personalCommand.key, personalCommand.value)
+                        ttsManager.speak("باشه، یادم موند")
+                    }
+                    is PersonalizationCommandParser.PersonalizationCommand.RecallFact -> {
+                        val memory = PersonalizationManager.findMemory(activity, personalCommand.query)
+                        if (memory != null) {
+                            ttsManager.speak(memory.value)
+                        }
+                    }
+                    is PersonalizationCommandParser.PersonalizationCommand.ForgetFact -> {
+                        PersonalizationManager.deleteMemory(activity, personalCommand.key)
+                        ttsManager.speak("باشه، فراموشش کردم")
                     }
                     else -> { }
                 }
@@ -167,7 +208,8 @@ fun HomeShell(
                 AidenTab.HOME -> HomeScreen(
                     selectedAvatar = selectedAvatar,
                     avatarState = avatarState,
-                    idleAnimation = idleAnimation
+                    idleAnimation = idleAnimation,
+                    assistantName = assistantName
                 )
                 AidenTab.RADAR -> {
                     val savedToken = prefs.getString("auth_token", null)
@@ -194,7 +236,8 @@ fun HomeShell(
 fun HomeScreen(
     selectedAvatar: AvatarChoice,
     avatarState: AvatarState,
-    idleAnimation: IdleAnimation
+    idleAnimation: IdleAnimation,
+    assistantName: String
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -210,6 +253,8 @@ fun HomeScreen(
             AvatarChoice.GHOST -> GhostBuddyAvatar(state = avatarState)
         }
         Spacer(Modifier.height(16.dp))
+        Text(assistantName, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
         Text(
             when (avatarState) {
                 AvatarState.LISTENING -> "در حال گوش دادن..."

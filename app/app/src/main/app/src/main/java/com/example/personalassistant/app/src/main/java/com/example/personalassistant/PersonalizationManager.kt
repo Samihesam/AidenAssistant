@@ -1,356 +1,119 @@
 package com.example.personalassistant
 
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Radar
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
-class MainActivity : ComponentActivity() {
+object PersonalizationManager {
 
-    private lateinit var ttsManager: AndroidTtsManager
-    private val prefs by lazy { getSharedPreferences("aiden_prefs", Context.MODE_PRIVATE) }
+    private const val PREFS_NAME = "aiden_personalization"
+    private const val KEY_ASSISTANT_NAME = "assistant_name"
+    private const val KEY_MEMORIES = "memories"
 
-    private val roleRequestLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    data class Memory(val key: String, val value: String, val timestamp: Long)
 
-    private val multiplePermissionsLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    fun getAssistantName(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_ASSISTANT_NAME, "ایدن") ?: "ایدن"
+    }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        ttsManager = AndroidTtsManager(this)
+    fun setAssistantName(context: Context, newName: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_ASSISTANT_NAME, newName).apply()
+    }
 
-        setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    AidenApp(
-                        activity = this,
-                        ttsManager = ttsManager,
-                        prefs = prefs,
-                        roleRequestLauncher = roleRequestLauncher,
-                        multiplePermissionsLauncher = multiplePermissionsLauncher
-                    )
-                }
-            }
+    fun getAllMemories(context: Context): List<Memory> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_MEMORIES, "[]") ?: "[]"
+        val array = JSONArray(raw)
+        return (0 until array.length()).map { i ->
+            val obj = array.getJSONObject(i)
+            Memory(obj.getString("key"), obj.getString("value"), obj.getLong("timestamp"))
         }
     }
 
-    override fun onDestroy() {
-        ttsManager.shutdown()
-        super.onDestroy()
-    }
-}
+    fun saveMemory(context: Context, key: String, value: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = getAllMemories(context).toMutableList()
 
-@Composable
-fun AidenApp(
-    activity: MainActivity,
-    ttsManager: AndroidTtsManager,
-    prefs: android.content.SharedPreferences,
-    roleRequestLauncher: androidx.activity.result.ActivityResultLauncher<Intent>,
-    multiplePermissionsLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>
-) {
-    var termsAccepted by remember { mutableStateOf(prefs.getBoolean("terms_accepted", false)) }
-    var onboardingDone by remember { mutableStateOf(prefs.getBoolean("onboarding_done", false)) }
-    var selectedAvatar by remember {
-        mutableStateOf(
-            AvatarChoice.valueOf(prefs.getString("selected_avatar", AvatarChoice.WIZARD.name)!!)
-        )
-    }
-    var selectedVoiceLabel by remember { mutableStateOf(prefs.getString("selected_voice", null)) }
+        current.removeAll { it.key.equals(key, ignoreCase = true) }
+        current.add(Memory(key, value, System.currentTimeMillis()))
 
-    if (!termsAccepted) {
-        TermsOfServiceScreen(
-            onAccepted = {
-                prefs.edit().putBoolean("terms_accepted", true).apply()
-                termsAccepted = true
-            }
-        )
-    } else if (!onboardingDone) {
-        OnboardingFlow(
-            ttsManager = ttsManager,
-            permissionList = buildPermissionList(),
-            onPermissionsAccepted = {
-                val permsToRequest = buildPermissionList().map { it.permission }.toTypedArray()
-                multiplePermissionsLauncher.launch(permsToRequest)
-            },
-            onComplete = { voice, avatar ->
-                selectedAvatar = avatar
-                selectedVoiceLabel = voice?.label
-                prefs.edit()
-                    .putBoolean("onboarding_done", true)
-                    .putString("selected_avatar", avatar.name)
-                    .putString("selected_voice", voice?.label)
-                    .apply()
-                onboardingDone = true
-            }
-        )
-    } else {
-        HomeShell(
-            activity = activity,
-            ttsManager = ttsManager,
-            prefs = prefs,
-            selectedAvatar = selectedAvatar,
-            onAvatarChanged = {
-                selectedAvatar = it
-                prefs.edit().putString("selected_avatar", it.name).apply()
-            },
-            roleRequestLauncher = roleRequestLauncher
-        )
+        val array = JSONArray()
+        current.forEach { mem ->
+            array.put(JSONObject().apply {
+                put("key", mem.key)
+                put("value", mem.value)
+                put("timestamp", mem.timestamp)
+            })
+        }
+        prefs.edit().putString(KEY_MEMORIES, array.toString()).apply()
+    }
+
+    fun findMemory(context: Context, query: String): Memory? {
+        return getAllMemories(context).firstOrNull {
+            it.key.contains(query, ignoreCase = true) || query.contains(it.key, ignoreCase = true)
+        }
+    }
+
+    fun deleteMemory(context: Context, key: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = getAllMemories(context).filterNot { it.key.equals(key, ignoreCase = true) }
+        val array = JSONArray()
+        current.forEach { mem ->
+            array.put(JSONObject().apply {
+                put("key", mem.key); put("value", mem.value); put("timestamp", mem.timestamp)
+            })
+        }
+        prefs.edit().putString(KEY_MEMORIES, array.toString()).apply()
+    }
+
+    fun clearAllMemories(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(KEY_MEMORIES).apply()
     }
 }
 
-enum class AidenTab { HOME, RADAR, SETTINGS }
+object PersonalizationCommandParser {
 
-@Composable
-fun HomeShell(
-    activity: MainActivity,
-    ttsManager: AndroidTtsManager,
-    prefs: android.content.SharedPreferences,
-    selectedAvatar: AvatarChoice,
-    onAvatarChanged: (AvatarChoice) -> Unit,
-    roleRequestLauncher: androidx.activity.result.ActivityResultLauncher<Intent>
-) {
-    var currentTab by remember { mutableStateOf(AidenTab.HOME) }
-    var avatarState by remember { mutableStateOf(AvatarState.IDLE) }
-    val idleAnimation = rememberIdleBehavior(currentState = avatarState)
-
-    var assistantName by remember { mutableStateOf(PersonalizationManager.getAssistantName(activity)) }
-
-    DisposableEffect(Unit) {
-        val receiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val text = intent?.getStringExtra("recognized_text") ?: return
-                avatarState = AvatarState.LISTENING
-
-                when (val command = VoiceCommandParser.parse(text)) {
-                    is VoiceCommandParser.AssistantCommand.ChangeAvatarVisibility -> {
-                        avatarState = if (command.show) AvatarState.IDLE else AvatarState.HIDDEN
-                        return
-                    }
-                    is VoiceCommandParser.AssistantCommand.OpenApp -> {
-                        val opened = AppLauncher.openAppByName(activity, command.appName)
-                        if (!opened) {
-                            ttsManager.speak("اپی به اسم ${command.appName} پیدا نکردم")
-                        }
-                        return
-                    }
-                    else -> { }
-                }
-
-                when (val personalCommand = PersonalizationCommandParser.parse(text)) {
-                    is PersonalizationCommandParser.PersonalizationCommand.RenameAssistant -> {
-                        PersonalizationManager.setAssistantName(activity, personalCommand.newName)
-                        assistantName = personalCommand.newName
-                        ttsManager.speak("باشه، از این به بعد اسمم ${personalCommand.newName} هست")
-                    }
-                    is PersonalizationCommandParser.PersonalizationCommand.RememberFact -> {
-                        PersonalizationManager.saveMemory(activity, personalCommand.key, personalCommand.value)
-                        ttsManager.speak("باشه، یادم موند")
-                    }
-                    is PersonalizationCommandParser.PersonalizationCommand.RecallFact -> {
-                        val memory = PersonalizationManager.findMemory(activity, personalCommand.query)
-                        if (memory != null) {
-                            ttsManager.speak(memory.value)
-                        }
-                    }
-                    is PersonalizationCommandParser.PersonalizationCommand.ForgetFact -> {
-                        PersonalizationManager.deleteMemory(activity, personalCommand.key)
-                        ttsManager.speak("باشه، فراموشش کردم")
-                    }
-                    else -> { }
-                }
-            }
-        }
-        val filter = android.content.IntentFilter(AlwaysListeningService.ACTION_WAKE_WORD_DETECTED)
-        ContextCompat.registerReceiver(activity, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        onDispose { activity.unregisterReceiver(receiver) }
+    sealed class PersonalizationCommand {
+        data class RenameAssistant(val newName: String) : PersonalizationCommand()
+        data class RememberFact(val key: String, val value: String) : PersonalizationCommand()
+        data class RecallFact(val query: String) : PersonalizationCommand()
+        data class ForgetFact(val key: String) : PersonalizationCommand()
+        object None : PersonalizationCommand()
     }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = currentTab == AidenTab.HOME,
-                    onClick = { currentTab = AidenTab.HOME },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "خانه") },
-                    label = { Text("خانه") }
-                )
-                NavigationBarItem(
-                    selected = currentTab == AidenTab.RADAR,
-                    onClick = { currentTab = AidenTab.RADAR },
-                    icon = { Icon(Icons.Default.Radar, contentDescription = "رادار") },
-                    label = { Text("رادار") }
-                )
-                NavigationBarItem(
-                    selected = currentTab == AidenTab.SETTINGS,
-                    onClick = { currentTab = AidenTab.SETTINGS },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "تنظیمات") },
-                    label = { Text("تنظیمات") }
-                )
-            }
-        }
-    ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
-            when (currentTab) {
-                AidenTab.HOME -> HomeScreen(
-                    selectedAvatar = selectedAvatar,
-                    avatarState = avatarState,
-                    idleAnimation = idleAnimation,
-                    assistantName = assistantName
-                )
-                AidenTab.RADAR -> {
-                    val savedToken = prefs.getString("auth_token", null)
-                    if (savedToken != null) {
-                        RadarScreen(authToken = savedToken)
-                    } else {
-                        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                            Text("برای استفاده از رادار، اول باید وارد حساب کاربری بشی")
-                        }
-                    }
-                }
-                AidenTab.SETTINGS -> SettingsScreen(
-                    activity = activity,
-                    selectedAvatar = selectedAvatar,
-                    onAvatarChanged = onAvatarChanged,
-                    roleRequestLauncher = roleRequestLauncher
-                )
-            }
-        }
-    }
-}
+    fun parse(text: String): PersonalizationCommand {
+        val normalized = text.trim()
 
-@Composable
-fun HomeScreen(
-    selectedAvatar: AvatarChoice,
-    avatarState: AvatarState,
-    idleAnimation: IdleAnimation,
-    assistantName: String
-) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        when (selectedAvatar) {
-            AvatarChoice.WIZARD -> WizardAvatar(state = avatarState, idleAnimation = idleAnimation)
-            AvatarChoice.ROBOT -> AssistantAvatar(state = avatarState)
-            AvatarChoice.CUTE_FACE -> CuteFaceAvatar(state = avatarState)
-            AvatarChoice.ASTRO -> AstroRobotAvatar(state = avatarState)
-            AvatarChoice.CAT -> CartoonCatAvatar(state = avatarState)
-            AvatarChoice.GHOST -> GhostBuddyAvatar(state = avatarState)
+        val renameRegex = Regex("اسمت\\s*(رو|را)?\\s*(بذار|عوض کن به)\\s*(.+)")
+        renameRegex.find(normalized)?.let {
+            val newName = it.groupValues[3].trim()
+            if (newName.isNotEmpty()) return PersonalizationCommand.RenameAssistant(newName)
         }
-        Spacer(Modifier.height(16.dp))
-        Text(assistantName, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            when (avatarState) {
-                AvatarState.LISTENING -> "در حال گوش دادن..."
-                AvatarState.SPEAKING -> "در حال صحبت..."
-                else -> "بگو «دستیار» تا فعال بشم"
-            },
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
 
-@Composable
-fun SettingsScreen(
-    activity: MainActivity,
-    selectedAvatar: AvatarChoice,
-    onAvatarChanged: (AvatarChoice) -> Unit,
-    roleRequestLauncher: androidx.activity.result.ActivityResultLauncher<Intent>
-) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("تنظیمات", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(16.dp))
-
-        SettingsSection("آواتار") {
-            AvatarChoice.entries.forEach { choice ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    onClick = { onAvatarChanged(choice) }
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(choice.label)
-                        if (selectedAvatar == choice) Text("✓")
-                    }
-                }
+        if (normalized.contains("یادت باشه") || normalized.contains("به خاطر بسپار")) {
+            val fact = normalized
+                .replace("یادت باشه", "")
+                .replace("به خاطر بسپار", "")
+                .trim()
+            if (fact.isNotEmpty()) {
+                val words = fact.split(" ")
+                val key = words.take(2).joinToString(" ")
+                return PersonalizationCommand.RememberFact(key = key, value = fact)
             }
         }
 
-        SettingsSection("دسترسی‌های ویژه") {
-            SettingsButton("اپ پیش‌فرض پیامک") {
-                DefaultAppManager.requestDefaultSmsApp(activity, roleRequestLauncher)
-            }
-            SettingsButton("اپ پیش‌فرض تلفن") {
-                DefaultAppManager.requestDefaultDialerApp(activity, roleRequestLauncher)
-            }
-            SettingsButton("نمایش روی سایر اپ‌ها (حباب شناور)") {
-                if (!OverlayPermissionHelper.hasOverlayPermission(activity)) {
-                    OverlayPermissionHelper.requestOverlayPermission(activity)
-                } else {
-                    activity.startService(Intent(activity, FloatingBubbleService::class.java))
-                }
-            }
-            SettingsButton("دسترسی‌پذیری (برای تعامل با سایر اپ‌ها)") {
-                activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+        if (normalized.contains("فراموش کن") || normalized.contains("یادت نباشه")) {
+            val key = normalized.replace("فراموش کن", "").replace("یادت نباشه", "").trim()
+            if (key.isNotEmpty()) return PersonalizationCommand.ForgetFact(key)
         }
 
-        SettingsSection("زبان") {
-            var expanded by remember { mutableStateOf(false) }
-            var selectedLang by remember { mutableStateOf(LanguageManager.supportedLanguages.first()) }
-            Box {
-                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(selectedLang.label)
-                }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    LanguageManager.supportedLanguages.forEach { lang ->
-                        DropdownMenuItem(
-                            text = { Text(lang.label) },
-                            onClick = { selectedLang = lang; expanded = false }
-                        )
-                    }
-                }
-            }
+        if (normalized.contains("؟") || normalized.startsWith("چی") || normalized.contains("کیه") || normalized.contains("چیه")) {
+            return PersonalizationCommand.RecallFact(normalized)
         }
 
-        SettingsSection("رادار") {
-            Text(
-                "با فعال‌سازی رادار، افراد نزدیک (بالای ۱۸ سال) می‌تونن ببیننت و درخواست چت بفرستن.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
-@Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Text(title, style = MaterialTheme.typography.titleMedium)
-    Spacer(Modifier.height(8.dp))
-    content()
-    Spacer(Modifier.height(20.dp))
-}
-
-@Composable
-private fun SettingsButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(label)
+        return PersonalizationCommand.None
     }
 }

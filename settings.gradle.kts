@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AidenAssistant"
 include(":app")
+project(":app").projectDir = file("app/app")
